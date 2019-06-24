@@ -1,0 +1,6 @@
+while true;
+do 
+docker stats --no-stream --format "{{.Container}}: {{.CPUPerc}} {{.MemUsage}} {{.MemPerc}}" gracious_varahamihira >> docker600.txt;
+free -h >> cache600.txt;
+sleep 0.5;
+done

@@ -1,1 +1,167 @@
---datadir=/root/.ethereum/devchain --nodekeyhex=091bd6067cb4612df85d9c1ff85cc47f259ced4d4cd99816b14f35650f59c322 --rpcapi "db,personal,eth,net,web3" --rpccorsdomain='*' --networkid=1234 --rpc --rpcaddr="0.0.0.0" init=/root/files/genesis.json --mine
+#!/bin/bash
+# Usage:
+# bash /path/to/eth-utils/gethup.sh <datadir> <instance_name>
+
+root=$1  # base directory to use for datadir and logs
+shift
+dd=$1  # double digit instance id like 00 01 02
+shift
+
+
+# logs are output to a date-tagged file for each run , while a link is
+# created to the latest, so that monitoring be easier with the same filename
+# TODO: use this if GETH not set
+# GETH=geth
+
+# geth CLI params       e.g., (dd=04, run=09)
+datetag=`date "+%c%y%m%d-%H%M%S"|cut -d ' ' -f 5`
+datadir=$root/data/$dd        # /tmp/eth/04
+log=$root/log/$dd.$datetag.log     # /tmp/eth/04.09.log
+linklog=$root/log/$dd.current.log     # /tmp/eth/04.09.log
+stablelog=$root/log/$dd.log     # /tmp/eth/04.09.log
+password=$dd            # 04
+port=311$dd              # 30304
+rpcport=82$dd            # 8104
+
+mkdir -p $root/data
+mkdir -p $root/log
+ln -sf "$log" "$linklog"
+# if we do not have an account, create one
+# will not prompt for password, we use the double digit instance id as passwd
+# NEVER EVER USE THESE ACCOUNTS FOR INTERACTING WITH A LIVE CHAIN
+if [ ! -d "$root/keystore/$dd" ]; then
+  echo create an account with password $dd [DO NOT EVER USE THIS ON LIVE]
+  mkdir -p $root/keystore/$dd
+  $GETH --datadir $datadir --password <(echo -n $dd) account new
+# create account with password 00, 01, ...
+  # note that the account key will be stored also separately outside
+  # datadir
+  # this way you can safely clear the data directory and still keep your key
+  # under `<rootdir>/keystore/dd
+
+  cp -R "$datadir/keystore" $root/keystore/$dd
+fi
+
+# echo "copying keys $root/keystore/$dd $datadir/keystore"
+# ls $root/keystore/$dd/keystore/ $datadir/keystore
+
+# mkdir -p $datadir/keystore
+# if [ ! -d "$datadir/keystore" ]; then
+echo "copying keys $root/keystore/$dd $datadir/keystore"
+cp -R $root/keystore/$dd/keystore/ $datadir/keystore/
+# fi
+
+BZZKEY=`$GETH --datadir=$datadir account list|head -n1|perl -ne '/([a-f0-9]{40})/ && print $1'`
+
+# bring up node `dd` (double digit)
+# - using <rootdir>/<dd>
+# - listening on port 303dd, (like 30300, 30301, ...)
+# - with the account unlocked
+# - launching json-rpc server on port 81dd (like 8100, 8101, 8102, ...)
+echo "$GETH --datadir=$datadir \
+  --identity="$dd" \
+  --bzzaccount=$BZZKEY --bzzport=86$dd \
+  --port=$port \
+  --unlock=$BZZKEY \
+  --password=<(echo -n $dd) \
+  --rpc --rpcport=$rpcport --rpccorsdomain='*' $* \
+  2>&1 | tee "$stablelog" > "$log" &  # comment out if you pipe it to a tty etc.
+"
+
+$GETH --datadir=$datadir \
+  --identity="$dd" \
+  --bzzaccount=$BZZKEY --bzzport=86$dd \
+  --port=$port \
+  --unlock=$BZZKEY \
+  --password=<(echo -n $dd) \
+  --rpc --rpcport=$rpcport --rpccorsdomain='*' $* \
+   2>&1 | tee "$stablelog" > "$log" &  # comment out if you pipe it to a tty etc.
+
+# to bring up logs, uncomment
+# tail -f $log
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# !/bin/bash
+# bash cluster <root> <network_id> <number_of_nodes>  <runid> <local_IP> [[params]...]
+# https://github.com/ethereum/go-ethereum/wiki/Setting-up-monitoring-on-local-cluster
+
+# sets up a local ethereum network cluster of nodes
+# - <number_of_nodes> is the number of nodes in cluster
+# - <root> is the root directory for the cluster, the nodes are set up
+#   with datadir `<root>/<network_id>/00`, `<root>/ <network_id>/01`, ...
+# - new accounts are created for each node
+# - they launch on port 30300, 30301, ...
+# - they star rpc on port 8100, 8101, ...
+# - by collecting the nodes nodeUrl, they get connected to each other
+# - if enode has no IP, `<local_IP>` is substituted
+# - if `<network_id>` is not 0, they will not connect to a default client,
+#   resulting in a private isolated network
+# - the nodes log into `<root>/00.<runid>.log`, `<root>/01.<runid>.log`, ...
+# - The nodes launch in mining mode
+# - the cluster can be killed with `killall geth` (FIXME: should record PIDs)
+#   and restarted from the same state
+# - if you want to interact with the nodes, use rpc
+# - you can supply additional params on the command line which will be passed
+#   to each node, for instance `-mine`
+
+
+root=$1
+shift
+network_id=$1
+dir=$root/$network_id
+mkdir -p $dir/data
+mkdir -p $dir/log
+shift
+N=$1
+shift
+ip_addr=$1
+shift
+
+# GETH=geth
+
+if [ ! -f "$dir/nodes"  ]; then
+
+  echo "[" >> $dir/nodes
+  for ((i=0;i<N;++i)); do
+    id=`printf "%02d" $i`
+    if [ ! $ip_addr="" ]; then
+      ip_addr="[::]"
+    fi
+
+    echo "getting enode for instance $id ($i/$N)"
+    eth="$GETH --datadir $dir/data/$id --port 303$id --networkid $network_id"
+    cmd="$eth js <(echo 'console.log(admin.nodeInfo.enode); exit();') "
+    echo $cmd
+    bash -c "$cmd" 2>/dev/null |grep enode | perl -pe "s/\[\:\:\]/$ip_addr/g" | perl -pe "s/^/\"/; s/\s*$/\"/;" | tee >> $dir/nodes
+    if ((i<N-1)); then
+      echo "," >> $dir/nodes
+    fi
+  done
+  echo "]" >> $dir/nodes
+fi
+
+for ((i=0;i<N;++i)); do
+  id=`printf "%02d" $i`
+  # echo "copy $dir/data/$id/static-nodes.json"
+  mkdir -p $dir/data/$id
+  # cp $dir/nodes $dir/data/$id/static-nodes.json
+  echo "launching node $i/$N ---> tail-f $dir/log/$id.log"
+  echo GETH=$GETH bash ./gethup.sh $dir $id --networkid $network_id $*
+  GETH=$GETH bash ./gethup.sh $dir $id --networkid $network_id $*
+done
